@@ -12,12 +12,11 @@ from src.core.image_describer.prompts.pdf_image_describer_prompt import PDF_IMAG
 
 class PdfImageDescriber(BaseImageDescriber):
     def __init__(self):
-        # Initialize LLM client
+        # Initialize LLM client with Gemini
         factory = LLMClientFactory()
-        claude_info = factory.get_client("gpt-4.1-nano")
-        self.model = claude_info["model"]
-        self.client = claude_info["client"]
-        
+        gemini_info = factory.get_client("gemini-2.5-flash")
+        self.model = gemini_info["model"]
+        self.client = gemini_info["client"]
         # Call parent constructor (note: parent expects llm_client param)
         super().__init__(self.client)
 
@@ -278,38 +277,31 @@ class PdfImageDescriber(BaseImageDescriber):
             context_before=context_before,
             context_after=context_after
         )
-
         try:
-            response = self.client.chat.completions.create(
+            response = self.client.models.generate_content(
                 model=self.model,
-                messages=[
+                contents=[
                     {
                         "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": prompt
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{image_base64}"
-                                }
-                            }
+                        "parts": [
+                            {"text": prompt},
+                            {"inline_data": {"mime_type": "image/jpeg", "data": image_base64}}
                         ]
                     }
                 ],
-                temperature=0.2,
             )
-            
-            description = response.choices[0].message.content.strip()
-            word_count = len(description.split())
-            logging.info(f"Generated vision description for image {image_index}: {word_count} words - {description[:50]}...")
-            return description
-            
+            # Lấy kết quả từ Gemini
+            if hasattr(response, "candidates") and response.candidates:
+                candidate = response.candidates[0]
+                if candidate.content.parts:
+                    description = candidate.content.parts[0].text.strip()
+                    word_count = len(description.split())
+                    logging.info(f"Generated vision description for image {image_index}: {word_count} words - {description[:50]}...")
+                    return description
+            logging.warning(f"No description returned for image {image_index}")
+            return f"[No description generated for image {image_index}]"
         except Exception as e:
             logging.error(f"Error generating vision description for image {image_index}: {e}")
-            # Simple fallback without additional LLM call
             return f"Image content at position {image_index} (vision API unavailable)"
 
     def replace_images_with_description(self):
@@ -349,3 +341,7 @@ class PdfImageDescriber(BaseImageDescriber):
         
         return pdf_path
 
+if __name__ == "__main__":
+    describer = PdfImageDescriber()
+    file_path = "data/sample_documents/project_doc_1_image.pdf"
+    describer.run(file_path)
