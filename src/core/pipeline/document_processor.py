@@ -44,10 +44,11 @@ class DocumentProcessor:
         self.llm_factory = LLMClientFactory()
         self.llm_client_gpt41_nano = self.llm_factory.get_client("gpt-4.1-nano")
         self.llm_client_gpt41 = self.llm_factory.get_client("gpt-4.1")
+        self.llm_client_gemini = self.llm_factory.get_client("gemini-2.5-flash")
         
 
         # Khởi tạo describer
-        self.docx_image_describer = DocxImageDescriber(self.llm_client_gpt41_nano)
+        self.docx_image_describer = DocxImageDescriber(self.llm_client_gemini)
         self.pdf_image_describer = PdfImageDescriber()
         self.excel_image_describer = ExcelImageDescriber(self.llm_client_gpt41_nano)
 

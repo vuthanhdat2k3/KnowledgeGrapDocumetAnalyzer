@@ -23,6 +23,8 @@ anthropic>=0.25.0
 langchain>=0.1.0
 langchain-openai>=0.1.0
 langchain-experimental>=0.3.4
+google-genai>=0.3.0
+sentence-transformers>=2.2.2  # For embedding models like MiniLM-L6-v2
 
 # Data processing
 numpy>=1.24.0

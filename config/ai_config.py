@@ -13,13 +13,17 @@ class AIConfig(BaseModel):
     
     # LLM Client Configuration
     api_key: Optional[str] = os.getenv("API_KEY")
+    genai_api_key: Optional[str] = os.getenv("GENAI_API_KEY")
     base_url: Optional[str] = os.getenv("BASE_URL")
     
     # Model Names
     model_gpt_41: Optional[str] = os.getenv("MODEL_NAME__GPT_41")
     model_gpt_41_nano: Optional[str] = os.getenv("MODEL_NAME__GPT_41_NANO")
     model_claude_35: Optional[str] = os.getenv("MODEL_NAME__CLAUDE_35")
-    model_embedding: Optional[str] = os.getenv("MODEL_NAME__EMBEDDING")
+    
+    model_embedding: Optional[str] = os.getenv("MODEL_NAME_EMBEDDING")
+    
+    model_gemini_25_flash: Optional[str] = os.getenv("MODEL_NAME_GEMINI")
     
     # Default Parameters
     temperature: float = float(os.getenv("TEMPERATURE", "0.7"))
@@ -35,6 +39,7 @@ class AIConfig(BaseModel):
             "gpt-4.1-nano": self.model_gpt_41_nano,
             "claude-3-5": self.model_claude_35,
             "embedding": self.model_embedding,
+            "gemini-2.5-flash": self.model_gemini_25_flash
         }
     
     # Knowledge Graph
