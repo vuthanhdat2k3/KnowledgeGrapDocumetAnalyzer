@@ -144,20 +144,23 @@ class DocxImageDescriber(BaseImageDescriber):
     def generate_descriptions(self, base64_image, ext, before_text, after_text):
         """Sinh mô tả từ ảnh base64 và context."""
         try:
-            image_url = f"data:image/{ext};base64,{base64_image}"
             prompt_text = prompt_template.format(before_text=before_text, after_text=after_text)
 
-            message = self.llm["client"].chat.completions.create(
+            response = self.llm["client"].models.generate_content(
                 model=self.llm["model"],
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": [
-                        {"type": "text", "text": prompt_text},
-                        {"type": "image_url", "image_url": {"url": image_url}}
+                contents=[
+                    {"role": "user", "parts": [
+                        {"text": f"{system_prompt}\n\n{prompt_text}"},
+                        {
+                            "inline_data": {
+                                "mime_type": f"image/{ext}",
+                                "data": base64_image
+                            }
+                        }
                     ]}
                 ],
             )
-            description = message.choices[0].message.content.strip()
+            description = response.text
             logging.info("Đã sinh mô tả thành công")
             logging.info(f"Mô tả: {description}")
             return description
@@ -250,7 +253,7 @@ class DocxImageDescriber(BaseImageDescriber):
 if __name__ == "__main__":
     load_dotenv()
     llm_factory = LLMClientFactory()
-    gpt_client = llm_factory.get_client("gpt-4.1")
+    gpt_client = llm_factory.get_client("gemini-2.5-flash")
     docx = DocxImageDescriber(llm_client=gpt_client)
 
     # Ví dụ sử dụng - hoạt động với cả file .doc và .docx

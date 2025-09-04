@@ -40,7 +40,7 @@ class DocxMarkdownChunker(BaseMarkdownChunker):
     4. Process oversized table chunks with LLM
     """
     
-    def __init__(self, max_tokens: int = 650, model_name: str = "gpt-4.1"):
+    def __init__(self, max_tokens: int = 650, model_name: str = "gemini-2.5-flash"):
         super().__init__()
         self.max_tokens = max_tokens
         
@@ -830,32 +830,44 @@ class DocxMarkdownChunker(BaseMarkdownChunker):
         return result
 
     def _split_with_llm(self, content: str, retry: bool = False) -> List[Dict[str, Any]]:
-        """Split content using LLM."""
+        """Split content using Gemini LLM (gemini-2.5-flash)."""
         if not self.llm_client:
             raise RuntimeError("LLM client not available")
             
         content_tokens = self.count_tokens(content)
         prompt = self._generate_llm_prompt(content, content_tokens, retry)
-        
+
         try:
-            response = self.llm_client["client"].chat.completions.create(
+            response = self.llm_client["client"].models.generate_content(
                 model=self.llm_client["model"],
-                max_tokens=LLM_MAX_TOKENS,
-                temperature=LLM_TEMPERATURE,
-                messages=[
-                    {"role": "system", "content": SYSTEM_MESSAGE},
-                    {"role": "user", "content": prompt}
-                ]
+                contents=[
+                    {"role": "user", "parts": [{"text": SYSTEM_MESSAGE}]},
+                    {"role": "user", "parts": [{"text": prompt}]}
+                ],
+                generation_config={
+                    "max_output_tokens": LLM_MAX_TOKENS,
+                    "temperature": LLM_TEMPERATURE,
+                },
             )
 
-            if not response.choices or not response.choices[0].message.content:
-                raise RuntimeError("LLM returned empty response")
+            # Lấy text từ Gemini response
+            if hasattr(response, "candidates") and response.candidates:
+                candidate = response.candidates[0]
+                if candidate.content and candidate.content.parts:
+                    response_text = "".join(
+                        part.text for part in candidate.content.parts if hasattr(part, "text")
+                    )
+                else:
+                    raise RuntimeError("Gemini returned empty content")
+            else:
+                raise RuntimeError("Gemini returned no candidates")
 
-            return self._parse_chunks_from_response(response.choices[0].message.content)
+            return self._parse_chunks_from_response(response_text)
             
         except Exception as e:
-            logger.error(f"❌ Error during LLM processing: {e}")
+            logger.error(f"❌ Error during Gemini LLM processing: {e}")
             raise
+
 
     def _create_chunks_from_llm_content(self, original_chunk: Dict[str, Any], content_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Create new chunk objects from LLM split content."""
