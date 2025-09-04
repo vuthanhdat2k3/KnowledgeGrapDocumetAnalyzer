@@ -1,12 +1,15 @@
 import os
 import re
 import logging
+import time
+import random
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
 
 import pandas as pd
+from google.genai.errors import ServerError  # ✅ để bắt lỗi 503
 
 from src.core.markdown_converter.base_markdown_converter import BaseMarkdownConverter
 from src.core.llm_client import LLMClientFactory
@@ -52,9 +55,9 @@ class ContextBuffer:
         return context_str
 
 class ExcelMarkdownConverter(BaseMarkdownConverter):
-    def __init__(self):
+    def __init__(self, model_name: str = "gemini-2.5-flash"):
         factory = LLMClientFactory()
-        llm_info = factory.get_client("gpt-4.1-nano")
+        llm_info = factory.get_client(model_name)
         self.model = llm_info["model"]
         self.client = llm_info["client"]
         self.context_buffer = ContextBuffer()
@@ -108,25 +111,43 @@ class ExcelMarkdownConverter(BaseMarkdownConverter):
         return chunks
 
     def process_chunk_with_llm(self, context: str, chunk: str) -> Dict[str, Any]:
+        """Gọi Gemini với retry và fallback khi quá tải hoặc JSON lỗi."""
         prompt = self._build_user_prompt(context, chunk)
         logging.debug(f"Sending prompt to LLM. Context length: {len(context)}, Chunk length: {len(chunk)}")
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0,
-            max_tokens=16384,
-        )
-        response_content = response.choices[0].message.content.strip().strip("```json").strip()
-        logging.debug(f"LLM response: {response_content[:300]}...")  # Log only first 300 chars
-        try:
-            result = json.loads(response_content)
-            logging.info("LLM response successfully parsed as JSON.")
-        except Exception as e:
-            logging.warning(f"Failed to parse LLM response as JSON: {e}")
-            result = response_content
-        return result
+
+        max_retries = 5
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=[{"role": "user", "parts": [{"text": prompt}]}],
+                    config={"temperature": 0.0, "max_output_tokens": 16000},
+                )
+                response_content = response.text.strip().strip("```json").strip()
+                logging.debug(f"LLM response (first 300 chars): {response_content[:300]}...")
+
+                try:
+                    result = json.loads(response_content)
+                    logging.info("LLM response successfully parsed as JSON.")
+                    return result
+                except Exception:
+                    logging.warning("Failed to parse LLM response as JSON, returning raw text.")
+                    return {"content": response_content}
+
+            except ServerError as e:
+                if e.status_code == 503:
+                    wait_time = 2 ** attempt + random.uniform(0, 1)
+                    logging.warning(f"Gemini overloaded (503). Retry {attempt}/{max_retries} after {wait_time:.1f}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise
+            except Exception as e:
+                logging.error(f"Unexpected LLM error: {e}")
+                return {"content": f"[LLM error: {e}]"}
+
+        logging.error("Gemini failed after retries, fallback to raw chunk")
+        return {"content": chunk}
 
     def convert_to_markdown(self, file_path: str, *args, **kwargs) -> str:
         logging.info(f"Reading Excel file: {file_path}")
@@ -145,7 +166,6 @@ class ExcelMarkdownConverter(BaseMarkdownConverter):
                 llm_result = self.process_chunk_with_llm(context_str, chunk_str)
                 if isinstance(llm_result, dict):
                     md_content += llm_result.get("content", "") + "\n"
-                    # Update context buffer from LLM result
                     currently_in_table = llm_result.get("currently_in_table", False)
                     current_table_header = llm_result.get("current_table_header", None)
                     last_three_rows = llm_result.get("last_three_rows", [])[-3:]
@@ -157,6 +177,11 @@ class ExcelMarkdownConverter(BaseMarkdownConverter):
 
 if __name__ == "__main__":
     converter = ExcelMarkdownConverter()
-    markdown = converter.convert_to_markdown("input.xlsx")
-    with open("output.md", "w", encoding="utf-8") as f:
+    markdown = converter.convert_to_markdown(
+        "data/sample_documents/iiPay-Global-Payroll-Request-for-Proposal-Template-1_described.xlsx"
+    )
+    with open(
+        "data/sample_documents/iiPay-Global-Payroll-Request-for-Proposal-Template-1_described.md",
+        "w", encoding="utf-8"
+    ) as f:
         f.write(markdown)

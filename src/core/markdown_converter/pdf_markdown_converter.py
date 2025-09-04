@@ -3,6 +3,7 @@ from src.core.llm_client import LLMClientFactory
 from src.core.markdown_converter.prompts.pdf_prompts import PDF_TO_MARKDOWN_DETAILED_PROMPT
 import os
 import json
+import time
 import fitz
 import re
 import logging
@@ -12,11 +13,9 @@ from tqdm import tqdm
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 class PdfMarkdownConverter(BaseMarkdownConverter):
-    def __init__(self, image_dir="images"):
-        self.image_dir = image_dir
-
+    def __init__(self, model_name:str="gemini-2.5-flash"):
         factory = LLMClientFactory()
-        gpt_info = factory.get_client("gpt-4.1-nano")
+        gpt_info = factory.get_client(model_name)
         self.model = gpt_info["model"]
         self.client = gpt_info["client"]
 
@@ -28,7 +27,7 @@ class PdfMarkdownConverter(BaseMarkdownConverter):
     def _build_prompt(self, content: str) -> str:
         return PDF_TO_MARKDOWN_DETAILED_PROMPT.format(content=content)
 
-    def _split_text(self, text: str, max_length: int = 16000) -> list:
+    def _split_text(self, text: str, max_length: int = 10000) -> list:
         """Split content into chunks that don't exceed `max_length` characters."""
         paragraphs = text.split("\n\n")
         chunks = []
@@ -552,6 +551,25 @@ class PdfMarkdownConverter(BaseMarkdownConverter):
         logging.info("✓ Post-processing completed")
         return markdown_content.strip()
     
+    def _extract_response_text(self, response, idx: int) -> str:
+        """Trích xuất văn bản từ response của Gemini, fallback khi rỗng."""
+        texts = []
+        # Chỉ xử lý Gemini candidates
+        if hasattr(response, "candidates"):
+            for cand in getattr(response, "candidates", []):
+                if getattr(cand, "content", None):
+                    for part in getattr(cand.content, "parts", []):
+                        if hasattr(part, "text") and part.text:
+                            texts.append(part.text)
+        # Fallback sang response.text (nếu Gemini trả về dạng này)
+        if not texts and hasattr(response, "text"):
+            if response.text:
+                texts.append(response.text)
+        if not texts:
+            logging.warning(f"Chunk {idx+1} trả về rỗng → dùng placeholder")
+            return f"[Không thể tạo nội dung cho phần {idx+1}]"
+        return "\n".join(texts)
+    
     def convert_to_markdown(self, file_path: str) -> str:
         logging.info(f"Reading PDF file: {file_path}")
         
@@ -565,7 +583,7 @@ class PdfMarkdownConverter(BaseMarkdownConverter):
             logging.info(f"Replaced {len(descriptions)} image placeholders with descriptions")
         
         # Split into chunks for LLM processing
-        text_chunks = self._split_text(full_text, max_length=16000)
+        text_chunks = self._split_text(full_text)
         logging.info(f"Document split into {len(text_chunks)} chunk(s)")
         
         # Process each chunk with LLM
@@ -574,20 +592,28 @@ class PdfMarkdownConverter(BaseMarkdownConverter):
             prompt = self._build_prompt(chunk)
 
             logging.info(f"Sending chunk {idx + 1} to LLM...")
-            
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0,
-                max_tokens=16384,
-            )
-
-            markdown_text = response.choices[0].message.content
-            all_md_parts.append(markdown_text)
-            logging.info(f"Chunk {idx + 1} processed.")
+            # Retry với backoff khi gặp 503
+            for attempt in range(3):
+                try:
+                    response = self.client.models.generate_content(
+                        model=self.model,
+                        contents=[
+                            {"role": "user", "parts":[{"text": f"You are a helpful assistant.\n\n{prompt}"}]}
+                        ],
+                    )
+                    markdown_text = self._extract_response_text(response, idx)
+                    all_md_parts.append(markdown_text)
+                    logging.info(f"Chunk {idx+1} processed successfully.")
+                    break
+                except Exception as e:
+                    if "503" in str(e) and attempt < 2:
+                        wait_time = 2 ** attempt
+                        logging.warning(f"Chunk {idx+1} bị 503, thử lại sau {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+                    logging.error(f"Error processing chunk {idx+1}: {e}")
+                    all_md_parts.append(f"[Lỗi khi xử lý chunk {idx+1}]")
+                    break
             
         # Combine all parts
         final_markdown = "\n\n".join(all_md_parts)
@@ -630,7 +656,7 @@ if __name__ == "__main__":
     converter = PdfMarkdownConverter()
     
     # Test with sample PDF file  
-    test_file = "data/sample_documents/partnership_banking_services_rfp.pdf"
+    test_file = "data/sample_documents/project_doc_1_image.pdf"
     
     try:
         result_path = converter.convert_to_markdown(test_file)
