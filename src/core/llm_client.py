@@ -21,6 +21,20 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
     print("Warning: Anthropic package not installed. Claude clients will not be available.")
+    
+try:
+    from google import genai
+    GENAI_AVAILABLE = True
+except ImportError:
+    GENAI_AVAILABLE = False
+    print("Warning: Genai package not installed. Gemini clients will not be available.")
+    
+try:
+    from sentence_transformers import SentenceTransformer
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+    print("Warning: sentence-transformers package not installed. Local embedding models will not be available.")
 
 from config.ai_config import ai_config
 
@@ -36,6 +50,7 @@ class LLMClientFactory:
         """
         self.config = config or ai_config
         self.api_key = self.config.api_key
+        self.genai_api_key = self.config.genai_api_key
         self.base_url = self.config.base_url
         self.models = self.config.models
 
@@ -44,7 +59,7 @@ class LLMClientFactory:
         Tạo client cho model được chỉ định
         
         Args:
-            model_key: Key của model ("gpt-4.1", "claude-3-5", etc.)
+            model_key: Key của model ("gpt-4.1", "claude-3-5", "embedding", etc.)
             **kwargs: Additional parameters cho client (temperature, max_tokens, etc.)
             
         Returns:
@@ -66,6 +81,8 @@ class LLMClientFactory:
             return self._create_anthropic_client(model_name, client_params)
         elif model_key == "embedding":
             return self._create_embedding_client(model_name, client_params)
+        elif model_key.startswith("gemini"):
+            return self._create_genai_client(model_name, client_params)
         else:
             raise ValueError(f"Unsupported model key: {model_key}")
 
@@ -86,20 +103,48 @@ class LLMClientFactory:
         }
 
     def _create_embedding_client(self, model_name, params):
-        """Tạo embedding client (sử dụng OpenAI API)"""
-        if not OPENAI_AVAILABLE:
-            raise ImportError("OpenAI package is not installed. Please install with: pip install openai")
+        """Tạo embedding client (dựa vào loại model)"""
+        # Kiểm tra xem model_name có phải là model Sentence Transformers (local) không
+        if model_name in ["MiniLM-L6-v2", "all-MiniLM-L6-v2", "paraphrase-MiniLM-L6-v2"]:
+            return self._create_sentence_transformer_client(model_name, params)
+        else:
+            # Sử dụng OpenAI API cho embedding
+            if not OPENAI_AVAILABLE:
+                raise ImportError("OpenAI package is not installed. Please install with: pip install openai")
+                
+            if not self.base_url:
+                raise ValueError("BASE_URL is required for OpenAI embedding client")
+                
+            client = OpenAI(api_key=self.api_key, base_url=self.base_url + "/v1")
+            return {
+                "model": model_name,
+                "client": client,
+                "default_params": params,
+                "type": "embedding_openai"
+            }
             
-        if not self.base_url:
-            raise ValueError("BASE_URL is required for embedding client")
+    def _create_sentence_transformer_client(self, model_name, params):
+        """Tạo embedding client sử dụng Sentence Transformers (local)"""
+        if not SENTENCE_TRANSFORMERS_AVAILABLE:
+            raise ImportError("sentence-transformers package not installed. Please install with: pip install sentence-transformers")
             
-        client = OpenAI(api_key=self.api_key, base_url=self.base_url + "/v1")
-        return {
-            "model": model_name,
-            "client": client,
-            "default_params": params,
-            "type": "embedding"
-        }
+        # Tiền tố "all-" thường được sử dụng trong Hugging Face, nhưng đôi khi không cần
+        if model_name == "MiniLM-L6-v2":
+            full_model_name = "all-MiniLM-L6-v2"
+        else:
+            full_model_name = model_name
+            
+        try:
+            # Tải mô hình Sentence Transformer
+            client = SentenceTransformer(full_model_name)
+            return {
+                "model": full_model_name,
+                "client": client,
+                "default_params": params,
+                "type": "embedding_sentence_transformer"
+            }
+        except Exception as e:
+            raise ValueError(f"Failed to load Sentence Transformer model '{full_model_name}': {str(e)}")
 
     def _create_anthropic_client(self, model_name, params):
         """Tạo Anthropic client"""
@@ -117,7 +162,18 @@ class LLMClientFactory:
             "type": "anthropic"
         }
 
-
+    def _create_genai_client(self, model_name, params):
+        if not GENAI_AVAILABLE:
+            raise ImportError("GenAI package is not installed. Please install with: pip install google-genai")
+        
+        client = genai.Client(api_key=self.genai_api_key)
+        return {
+            "model": model_name,
+            "client": client,
+            "default_params": params,
+            "type": "genai"
+        }
+        
     def chat_completion(self, model_key: str, messages: list, **kwargs):
         """
         Wrapper method để thực hiện chat completion
@@ -151,44 +207,59 @@ class LLMClientFactory:
                 messages=messages,
                 max_tokens=final_params.get("max_tokens", 1024)
             )
+        elif client_info["type"] == "genai":
+            return client.models.generate_content(
+                model=model_name,
+                contents=messages,
+                config={
+                    "temperature": final_params.get("temperature"),
+                    "max_output_tokens": final_params.get("max_tokens")
+                }
+            )
         else:
             raise ValueError(f"Unsupported client type: {client_info['type']}")
+            
+    def create_embeddings(self, model_key: str, texts: list, **kwargs):
+        """
+        Tạo embeddings cho danh sách văn bản
+        
+        Args:
+            model_key: Key của model embedding
+            texts: Danh sách văn bản cần tạo embedding
+            **kwargs: Additional parameters
+            
+        Returns:
+            Danh sách embeddings tương ứng với mỗi văn bản
+        """
+        client_info = self.get_client(model_key, **kwargs)
+        client = client_info["client"]
+        model_name = client_info["model"]
+        
+        if client_info["type"] == "embedding_openai":
+            # OpenAI embedding
+            response = client.embeddings.create(
+                model=model_name,
+                input=texts
+            )
+            return [item.embedding for item in response.data]
+            
+        elif client_info["type"] == "embedding_sentence_transformer":
+            # Sentence Transformers embedding
+            return client.encode(texts).tolist()
+            
+        else:
+            raise ValueError(f"Unsupported embedding client type: {client_info['type']}")
 
 
 # Usage example:
 if __name__ == "__main__":
     try:
         factory = LLMClientFactory()
-        
-        # Lấy clients
-        gpt_client = factory.get_client("gpt-4.1")
-        gpt_nano_client = factory.get_client("gpt-4.1-nano")
-        claude_client = factory.get_client("claude-3-5")
-        embedding_client = factory.get_client("embedding")
-
-        # Example usage với chat_completion wrapper
-        print("\n=== Chat Completion Examples ===")
-        
-        # GPT example
-        try:
-            response = factory.chat_completion(
-                "gpt-4.1", 
-                [{"role": "user", "content": "What is the capital of France?"}],
-                temperature=0.5
-            )
-            print("GPT answer:", response.choices[0].message.content)
-        except Exception as e:
-            print(f"GPT error: {e}")
-        
-        # Claude example
-        try:
-            response = factory.chat_completion(
-                "claude-3-5",
-                [{"role": "user", "content": "What is the capital of France?"}]
-            )
-            print("Claude answer:", response.content[0].text)
-        except Exception as e:
-            print(f"Claude error: {e}")
+        gemini_client = factory.get_client("gemini-2.5-flash")
+        print("Get gemini client successful")
+        messages = "Hãy cho biết bây giờ là mấy giờ?"
+        response = factory.chat_completion(model_key="gemini-2.5-flash", messages=messages)
+        print(response.text)
             
     except Exception as e:
         print(f"Factory initialization error: {e}")
