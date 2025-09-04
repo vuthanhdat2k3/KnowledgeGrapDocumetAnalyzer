@@ -82,26 +82,22 @@ class DocxMarkdownConverter:
         ]
 
     def _extract_response_text(self, response, idx: int) -> str:
-        """Trích xuất văn bản từ response của Gemini/OpenAI, fallback khi rỗng."""
+        """Trích xuất văn bản từ response của Gemini, fallback khi rỗng."""
         texts = []
-
-        # Ưu tiên Gemini candidates
+        # Chỉ xử lý Gemini candidates
         if hasattr(response, "candidates"):
             for cand in getattr(response, "candidates", []):
                 if getattr(cand, "content", None):
                     for part in getattr(cand.content, "parts", []):
                         if hasattr(part, "text") and part.text:
                             texts.append(part.text)
-
-        # Fallback sang response.text
+        # Fallback sang response.text (nếu Gemini trả về dạng này)
         if not texts and hasattr(response, "text"):
             if response.text:
                 texts.append(response.text)
-
         if not texts:
             logging.warning(f"Chunk {idx+1} trả về rỗng → dùng placeholder")
             return f"[Không thể tạo nội dung cho phần {idx+1}]"
-
         return "\n".join(texts)
 
     def convert_to_markdown(self, file_path: str) -> str:

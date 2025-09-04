@@ -13,31 +13,21 @@ class AIConfig(BaseModel):
     
     # LLM Client Configuration
     api_key: Optional[str] = os.getenv("API_KEY")
-    genai_api_key: Optional[str] = os.getenv("GENAI_API_KEY")
-    base_url: Optional[str] = os.getenv("BASE_URL")
     
     # Model Names
-    model_gpt_41: Optional[str] = os.getenv("MODEL_NAME__GPT_41")
-    model_gpt_41_nano: Optional[str] = os.getenv("MODEL_NAME__GPT_41_NANO")
-    model_claude_35: Optional[str] = os.getenv("MODEL_NAME__CLAUDE_35")
-    
     model_embedding: Optional[str] = os.getenv("MODEL_NAME_EMBEDDING")
-    
     model_gemini_25_flash: Optional[str] = os.getenv("MODEL_NAME_GEMINI")
     
     # Default Parameters
     temperature: float = float(os.getenv("TEMPERATURE", "0.7"))
-    max_tokens: int = int(os.getenv("MAX_TOKENS", "2000"))
+    max_tokens: int = int(os.getenv("MAX_TOKENS", "16000"))
     
     
     @property
     def models(self) -> dict:
         """Trả về dictionary các model được config"""
         return {
-            # OpenAI & Claude models
-            "gpt-4.1": self.model_gpt_41,
-            "gpt-4.1-nano": self.model_gpt_41_nano,
-            "claude-3-5": self.model_claude_35,
+            # models
             "embedding": self.model_embedding,
             "gemini-2.5-flash": self.model_gemini_25_flash
         }

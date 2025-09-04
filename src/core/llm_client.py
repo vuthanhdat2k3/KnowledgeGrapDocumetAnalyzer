@@ -8,21 +8,6 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 try:
-    from openai import OpenAI, AsyncOpenAI
-    import openai
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
-    print("Warning: OpenAI package not installed. OpenAI clients will not be available.")
-
-try:
-    import anthropic
-    ANTHROPIC_AVAILABLE = True
-except ImportError:
-    ANTHROPIC_AVAILABLE = False
-    print("Warning: Anthropic package not installed. Claude clients will not be available.")
-    
-try:
     from google import genai
     GENAI_AVAILABLE = True
 except ImportError:
@@ -50,57 +35,27 @@ class LLMClientFactory:
         """
         self.config = config or ai_config
         self.api_key = self.config.api_key
-        self.genai_api_key = self.config.genai_api_key
-        self.base_url = self.config.base_url
         self.models = self.config.models
 
     def get_client(self, model_key: str, **kwargs):
         """
-        Tạo client cho model được chỉ định
-        
-        Args:
-            model_key: Key của model ("gpt-4.1", "claude-3-5", "embedding", etc.)
-            **kwargs: Additional parameters cho client (temperature, max_tokens, etc.)
-            
-        Returns:
-            Dict chứa client và thông tin model
+        Tạo client cho model được chỉ định (chỉ hỗ trợ Gemini và embedding local)
         """
         model_name = self.models.get(model_key)
         if not model_name:
             raise ValueError(f"Model key '{model_key}' is not configured.")
 
-        # Merge default config với kwargs
         client_params = {
             "temperature": kwargs.get("temperature", self.config.temperature),
             "max_tokens": kwargs.get("max_tokens", self.config.max_tokens)
         }
 
-        if model_key.startswith("gpt"):
-            return self._create_openai_client(model_name, client_params)
-        elif model_key.startswith("claude"):
-            return self._create_anthropic_client(model_name, client_params)
-        elif model_key == "embedding":
+        if model_key == "embedding":
             return self._create_embedding_client(model_name, client_params)
         elif model_key.startswith("gemini"):
             return self._create_genai_client(model_name, client_params)
         else:
             raise ValueError(f"Unsupported model key: {model_key}")
-
-    def _create_openai_client(self, model_name, params):
-        """Tạo OpenAI client"""
-        if not OPENAI_AVAILABLE:
-            raise ImportError("OpenAI package is not installed. Please install with: pip install openai")
-            
-        if not self.base_url:
-            raise ValueError("BASE_URL is required for OpenAI client")
-            
-        client = OpenAI(api_key=self.api_key, base_url=self.base_url + "/v1")
-        return {
-            "model": model_name,
-            "client": client,
-            "default_params": params,
-            "type": "openai"
-        }
 
     def _create_embedding_client(self, model_name, params):
         """Tạo embedding client (dựa vào loại model)"""
@@ -108,20 +63,7 @@ class LLMClientFactory:
         if model_name in ["MiniLM-L6-v2", "all-MiniLM-L6-v2", "paraphrase-MiniLM-L6-v2"]:
             return self._create_sentence_transformer_client(model_name, params)
         else:
-            # Sử dụng OpenAI API cho embedding
-            if not OPENAI_AVAILABLE:
-                raise ImportError("OpenAI package is not installed. Please install with: pip install openai")
-                
-            if not self.base_url:
-                raise ValueError("BASE_URL is required for OpenAI embedding client")
-                
-            client = OpenAI(api_key=self.api_key, base_url=self.base_url + "/v1")
-            return {
-                "model": model_name,
-                "client": client,
-                "default_params": params,
-                "type": "embedding_openai"
-            }
+            raise ValueError("Only local sentence-transformers embedding is supported (OpenAI embedding removed)")
             
     def _create_sentence_transformer_client(self, model_name, params):
         """Tạo embedding client sử dụng Sentence Transformers (local)"""
@@ -146,27 +88,12 @@ class LLMClientFactory:
         except Exception as e:
             raise ValueError(f"Failed to load Sentence Transformer model '{full_model_name}': {str(e)}")
 
-    def _create_anthropic_client(self, model_name, params):
-        """Tạo Anthropic client"""
-        if not ANTHROPIC_AVAILABLE:
-            raise ImportError("Anthropic package is not installed. Please install with: pip install anthropic")
-            
-        if not self.base_url:
-            raise ValueError("BASE_URL is required for Anthropic client")
-            
-        client = anthropic.Anthropic(api_key=self.api_key, base_url=self.base_url)
-        return {
-            "model": model_name,
-            "client": client,
-            "default_params": params,
-            "type": "anthropic"
-        }
 
     def _create_genai_client(self, model_name, params):
         if not GENAI_AVAILABLE:
             raise ImportError("GenAI package is not installed. Please install with: pip install google-genai")
         
-        client = genai.Client(api_key=self.genai_api_key)
+        client = genai.Client(api_key=self.api_key)
         return {
             "model": model_name,
             "client": client,
@@ -176,38 +103,14 @@ class LLMClientFactory:
         
     def chat_completion(self, model_key: str, messages: list, **kwargs):
         """
-        Wrapper method để thực hiện chat completion
-        
-        Args:
-            model_key: Key của model
-            messages: List messages cho chat
-            **kwargs: Additional parameters
-            
-        Returns:
-            Response từ model
+        Wrapper method để thực hiện chat completion (chỉ hỗ trợ Gemini)
         """
         client_info = self.get_client(model_key, **kwargs)
         client = client_info["client"]
         model_name = client_info["model"]
         params = client_info["default_params"]
-        
-        # Merge params với kwargs
         final_params = {**params, **kwargs}
-        
-        if client_info["type"] == "openai":
-            return client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                temperature=final_params.get("temperature"),
-                max_tokens=final_params.get("max_tokens")
-            )
-        elif client_info["type"] == "anthropic":
-            return client.messages.create(
-                model=model_name,
-                messages=messages,
-                max_tokens=final_params.get("max_tokens", 1024)
-            )
-        elif client_info["type"] == "genai":
+        if client_info["type"] == "genai":
             return client.models.generate_content(
                 model=model_name,
                 contents=messages,
@@ -235,18 +138,9 @@ class LLMClientFactory:
         client = client_info["client"]
         model_name = client_info["model"]
         
-        if client_info["type"] == "embedding_openai":
-            # OpenAI embedding
-            response = client.embeddings.create(
-                model=model_name,
-                input=texts
-            )
-            return [item.embedding for item in response.data]
-            
-        elif client_info["type"] == "embedding_sentence_transformer":
+        if client_info["type"] == "embedding_sentence_transformer":
             # Sentence Transformers embedding
             return client.encode(texts).tolist()
-            
         else:
             raise ValueError(f"Unsupported embedding client type: {client_info['type']}")
 

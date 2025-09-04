@@ -253,8 +253,8 @@ class DocxImageDescriber(BaseImageDescriber):
 if __name__ == "__main__":
     load_dotenv()
     llm_factory = LLMClientFactory()
-    gpt_client = llm_factory.get_client("gemini-2.5-flash")
-    docx = DocxImageDescriber(llm_client=gpt_client)
+    client = llm_factory.get_client("gemini-2.5-flash")
+    docx = DocxImageDescriber(llm_client=client)
 
     # Ví dụ sử dụng - hoạt động với cả file .doc và .docx
     input_path = "data/sample_documents/elpasoamiandmdmsrfpv19_10012019-final.docx" 

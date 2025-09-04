@@ -63,7 +63,7 @@ class DocxMarkdownChunker(BaseMarkdownChunker):
             self.llm_client = self.llm_factory.get_client(model_name)
             logger.info(f"✅ {model_name} client initialized successfully")
         except Exception as e:
-            logger.warning(f"⚠️ Failed to initialize GPT client: {e}. Table splitting will be skipped.")
+            logger.warning(f"⚠️ Failed to initialize LLM client: {e}. Table splitting will be skipped.")
             self.llm_client = None
 
     def count_tokens(self, text: str) -> int:
