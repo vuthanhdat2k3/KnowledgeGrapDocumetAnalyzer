@@ -9,7 +9,7 @@ from pydantic import BaseModel
 class Neo4jConfig(BaseModel):
     """Cấu hình kết nối Neo4j"""
     
-    uri: str = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+    uri: str = os.getenv("NEO4J_URI", "bolt://localhost:7688")
     username: str = os.getenv("NEO4J_USERNAME", "neo4j")
     password: str = os.getenv("NEO4J_PASSWORD", "password123")
     database: str = os.getenv("NEO4J_DATABASE", "neo4j")

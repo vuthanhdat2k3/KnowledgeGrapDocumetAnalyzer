@@ -261,8 +261,8 @@ class ExcelKGBuilder(BaseKGBuilder):
 if __name__ == "__main__":
     graph_importer = ExcelKGBuilder()
     success = graph_importer.build(
-        file_path="data/graph/input.json",
-        document_name="document name",
+        file_path="data/output/nodes/iiPay-Global-Payroll-Request-for-Proposal-Template-1_described.json",
+        document_name="iiPay-Global-Payroll-Request-for-Proposal-Template-1_described",
     )
     
     if success:

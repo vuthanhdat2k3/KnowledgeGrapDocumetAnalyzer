@@ -844,7 +844,7 @@ class DocxMarkdownChunker(BaseMarkdownChunker):
                     {"role": "user", "parts": [{"text": SYSTEM_MESSAGE}]},
                     {"role": "user", "parts": [{"text": prompt}]}
                 ],
-                generation_config={
+                config={
                     "max_output_tokens": LLM_MAX_TOKENS,
                     "temperature": LLM_TEMPERATURE,
                 },

@@ -636,6 +636,6 @@ class ExcelMarkdownChunker(BaseMarkdownChunker):
 
 if __name__ == "__main__":
     chunker = ExcelMarkdownChunker(token_limit=1000)
-    chunks = chunker.chunk_from_file('data/markdown/input.md')
-    chunker.save_chunks_to_json(chunks, 'data/chunk/output.json')
+    chunks = chunker.chunk_from_file('data/sample_documents/SAMA-RFP-final.md')
+    chunker.save_chunks_to_json(chunks, 'data/output/chunks/SAMA-RFP-final.json')
 

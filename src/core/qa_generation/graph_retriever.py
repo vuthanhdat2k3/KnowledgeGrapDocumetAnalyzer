@@ -3,7 +3,7 @@
 import logging
 from typing import Dict, Any, List, Optional
 import time
-import re
+import random
 
 from src.core.knowledge_graph.neo4j_manager import neo4j_manager
 from src.core.llm_client import LLMClientFactory
@@ -19,47 +19,34 @@ from src.core.qa_generation.prompts import (
     SEMANTIC_SEARCH_GLOBAL_QUERY,
     LANGUAGE_DETECTION_PROMPT,
     TRANSLATION_PROMPT,
-    KEYWORD_EXTRACTION_PROMPT
 )
 
 # Setup logging
 logger = logging.getLogger(__name__)
-
 logging.basicConfig(
-    level=logging.INFO, 
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 
 class GraphRetriever:
-    
     def __init__(self, document_name: Optional[str] = None):
-        """
-        Initialize the retriever with optional document scope
-        
-        Args:
-            document_name: Name of the document to scope searches to. 
-                          If None, searches across entire graph.
-        """
         self.logger = logger
         self.neo4j_manager = neo4j_manager
         self.llm_factory = None
         self.document_name = document_name
-        
-        # Setup connections
+
         self._neo4j_connection()
         self._setup_llm_client()
-        
-        # Validate document exists if document_name is provided
+
         if self.document_name and not self._validate_document_exists(self.document_name):
             raise ValueError(f"Document with file_name '{self.document_name}' not found in the knowledge graph")
-        
+
         if self.document_name:
             self.logger.info(f"GraphRetriever initialized with document scope: {self.document_name}")
         else:
             self.logger.info("GraphRetriever initialized with global scope (entire graph)")
-    
+
     def _neo4j_connection(self):
-        """Setup Neo4j database connection"""
         try:
             if not self.neo4j_manager.is_connected():
                 logger.info("Connecting to Neo4j database...")
@@ -72,7 +59,6 @@ class GraphRetriever:
             raise
 
     def _setup_llm_client(self):
-        """Setup LLM client for embeddings and answer generation"""
         try:
             self.llm_factory = LLMClientFactory()
             logger.info("LLM client setup successfully")
@@ -80,18 +66,25 @@ class GraphRetriever:
             logger.error(f"Failed to setup LLM client: {e}")
             raise
 
+    def call_with_retry(self, func, *args, retries: int = 5, backoff: float = 2.0, **kwargs):
+        """Retry wrapper cho các call tới LLM"""
+        for attempt in range(retries):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                if "503" in str(e) or "UNAVAILABLE" in str(e):
+                    wait_time = backoff * (2 ** attempt) + random.uniform(0, 1)
+                    self.logger.warning(f"503 UNAVAILABLE, retry {attempt+1}/{retries} sau {wait_time:.1f}s...")
+                    time.sleep(wait_time)
+                else:
+                    raise
+        raise RuntimeError("Failed after max retries due to repeated errors")
+
     def _validate_document_exists(self, document_name: str) -> bool:
-        """
-        Validate that a document with the given file_name exists in the knowledge graph
-        
-        Args:
-            document_name: The file_name to check
-            
-        Returns:
-            True if document exists, False otherwise
-        """
         try:
-            results = self.neo4j_manager.execute_query(VALIDATE_DOCUMENT_QUERY, {"document_name": document_name})
+            results = self.neo4j_manager.execute_query(
+                VALIDATE_DOCUMENT_QUERY, {"document_name": document_name}
+            )
             return results[0]["document_count"] > 0 if results else False
         except Exception as e:
             logger.error(f"Error validating document existence: {e}")
@@ -99,109 +92,57 @@ class GraphRetriever:
 
     def detect_data_language(self, sample_size: int = 20) -> str:
         try:
-            # Query to get sample content from various node types
-            if self.document_name:
-                # Scoped to specific document
-                query = LANGUAGE_DETECTION_SCOPED_QUERY
-                parameters = {
-                    "sample_size": sample_size,
-                    "document_name": self.document_name
-                }
-            else:
-                # Global scope - entire graph
-                query = LANGUAGE_DETECTION_GLOBAL_QUERY
-                parameters = {"sample_size": sample_size}
-            
+            query, parameters = (
+                (LANGUAGE_DETECTION_SCOPED_QUERY, {"sample_size": sample_size, "document_name": self.document_name})
+                if self.document_name
+                else (LANGUAGE_DETECTION_GLOBAL_QUERY, {"sample_size": sample_size})
+            )
             results = self.neo4j_manager.execute_query(query, parameters)
-            
             if not results:
                 return "Unknown"
-            
-            # Use all available samples (not just first 5)
+
             sample_texts = [result["content"] for result in results]
             combined_text = "\n\n".join(sample_texts)
-            
-            # Use LLM to detect language
-            client_config = self.llm_factory.get_client("gpt-4.1")
-            client = client_config.get('client') if isinstance(client_config, dict) else client_config
-            
             prompt = LANGUAGE_DETECTION_PROMPT.format(combined_text=combined_text[:2000])
-            
-            response = client.chat.completions.create(
-                model=self.llm_factory.models.get("gpt-4.1"),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=50
+
+            response = self.call_with_retry(
+                self.llm_factory.chat_completion,
+                model_key="gemini-2.5-flash",
+                messages=prompt
             )
-            
-            detected_language = response.choices[0].message.content.strip()
-            
-            # Validate response - ensure it's a single word language name
+            detected_language = response.text.strip()
+
             if detected_language and len(detected_language.split()) == 1:
                 self.logger.info(f"Detected language: {detected_language}")
                 return detected_language
             else:
                 self.logger.warning(f"Invalid language response: {detected_language}")
                 return "Unknown"
-                
         except Exception as e:
             self.logger.error(f"Error detecting data language: {e}")
             return "Unknown"
 
     def create_embedding(self, text: str) -> List[float]:
-        """
-        Create embedding for a text using the configured embedding model
-        
-        Args:
-            text: Text to create embedding for
-            
-        Returns:
-            Embedding vector as list of floats, empty list if failed
-        """
         try:
-            client_config = self.llm_factory.get_client("embedding")
-            client = client_config.get('client') if isinstance(client_config, dict) else client_config
-            
-            response = client.embeddings.create(
-                input=text,
-                model=self.llm_factory.models.get("embedding")
-            )
-            
-            return response.data[0].embedding
-            
+            client = self.llm_factory.get_client("embedding")
+            embeddings = client["client"].encode([text])
+            return embeddings[0].tolist() if len(embeddings) > 0 else []
         except Exception as e:
             self.logger.error(f"Error creating embedding: {e}")
             return []
 
     def translate_question(self, question: str, target_language: str = "en") -> str:
-        """
-        Translate a question to target language for better semantic search
-        
-        Args:
-            question: Original question text
-            target_language: Target language code (default: "en")
-            
-        Returns:
-            Translated question, or original question if translation fails
-        """
         try:
-            client_config = self.llm_factory.get_client("gpt-4.1")
-            client = client_config.get('client') if isinstance(client_config, dict) else client_config
-            
             prompt = TRANSLATION_PROMPT.format(question=question, target_language=target_language)
-            
-            response = client.chat.completions.create(
-                model=self.llm_factory.models.get("gpt-4.1"),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=200
+            response = self.call_with_retry(
+                self.llm_factory.chat_completion,
+                model_key="gemini-2.5-flash",
+                messages=prompt
             )
-            
-            return response.choices[0].message.content.strip()
-            
+            return response.text.strip()
         except Exception as e:
             self.logger.error(f"Error translating question: {e}")
-            return question  # Return original if translation fails
+            return question
 
     def search_knowledge_graph_hybrid(self, 
                                       question_embedding: list,
